@@ -7,6 +7,7 @@ from typing import Dict
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 TASKS_FILE = os.path.join(BASE_DIR, "tasks.json")
 RESULTS_FILE = os.path.join(BASE_DIR, "results.json")
+MANUAL_QUEUE_FILE = os.path.join(BASE_DIR, "manual_queue.json")
 CONFIG_FILE = os.path.join(BASE_DIR, "config", "config.yaml")
 
 async def mock_llm_call(file_path: str, branch_name: str):
@@ -36,6 +37,61 @@ def append_result(result: Dict):
     with open(RESULTS_FILE, "w") as f:
         json.dump(results, f, indent=2)
 
+
+def read_results():
+    if not os.path.exists(RESULTS_FILE):
+        return []
+    with open(RESULTS_FILE, "r") as f:
+        try:
+            return json.load(f)
+        except Exception:
+            return []
+
+
+def enqueue_manual(item: Dict):
+    queue = []
+    if os.path.exists(MANUAL_QUEUE_FILE):
+        with open(MANUAL_QUEUE_FILE, "r") as f:
+            try:
+                queue = json.load(f)
+            except Exception:
+                queue = []
+    item_id = str(int(time.time() * 1000))
+    item["id"] = item_id
+    queue.append(item)
+    with open(MANUAL_QUEUE_FILE, "w") as f:
+        json.dump(queue, f, indent=2)
+    return item_id
+
+
+def read_manual_queue(limit: int = 100):
+    if not os.path.exists(MANUAL_QUEUE_FILE):
+        return []
+    with open(MANUAL_QUEUE_FILE, "r") as f:
+        try:
+            queue = json.load(f)
+        except Exception:
+            queue = []
+    return queue[:limit]
+
+
+def resolve_manual_item(item_id: str, resolution: Dict):
+    if not os.path.exists(MANUAL_QUEUE_FILE):
+        return False
+    with open(MANUAL_QUEUE_FILE, "r") as f:
+        try:
+            queue = json.load(f)
+        except Exception:
+            queue = []
+    new_q = [it for it in queue if it.get("id") != item_id]
+    found = len(queue) != len(new_q)
+    with open(MANUAL_QUEUE_FILE, "w") as f:
+        json.dump(new_q, f, indent=2)
+    if found:
+        # write resolution back to results
+        append_result({**resolution, "resolved_from_manual": item_id, "ts": int(time.time())})
+    return found
+
 async def run_branch(task_id: str, file_path: str, branch_conf: Dict):
     branch = branch_conf.get("name")
     retries = branch_conf.get("retries", 0)
@@ -52,7 +108,10 @@ async def run_branch(task_id: str, file_path: str, branch_conf: Dict):
                 raise ValueError("validation failed")
         except Exception as e:
             if attempts > retries:
-                append_result({"task_id": task_id, "branch": branch, "status": "FAILED", "error": str(e), "attempts": attempts, "ts": int(time.time())})
+                error_item = {"task_id": task_id, "branch": branch, "status": "FAILED", "error": str(e), "attempts": attempts, "ts": int(time.time())}
+                append_result(error_item)
+                # enqueue for manual review
+                enqueue_manual(error_item)
                 return
             await asyncio.sleep(0.2)
 
