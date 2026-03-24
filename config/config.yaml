@@ -1,0 +1,10 @@
+branches:
+  - name: metadata_extraction
+    llm: mock
+    schema: metadata_schema.json
+    retries: 2
+
+  - name: ocr_extraction
+    llm: mock
+    schema: ocr_schema.json
+    retries: 1
